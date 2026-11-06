@@ -1,345 +1,273 @@
-import socket
-import io
-import base64
-from flask import Flask, render_template_string, request, jsonify
+import streamlit as st
+import streamlit.components.v1 as components
+import qrcode
+from io import BytesIO
+import uuid
 
-# Tenta importar a biblioteca de QR Code
-try:
-    import qrcode
-except ImportError:
-    import sys
-    print("\n[ERRO] A biblioteca 'qrcode' não está instalada.")
-    print("Execute no terminal: pip install qrcode pillow flask\n")
-    sys.exit(1)
-
-app = Flask(__name__)
+# Configuração Geral da Página
+st.set_page_config(
+    page_title="Plataforma de Compliance & Votação",
+    page_icon="🛡️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 # ==============================================================================
-# CONFIGURAÇÃO DA PERGUNTA E OPÇÕES (EDITE AQUI SE DESEJAR)
+# BANCO DE DADOS EM MEMÓRIA PARA A VOTAÇÃO AO VIVO
 # ==============================================================================
-POLL_DATA = {
-    "title": "Votação de Compliance & Licenciamento",
-    "question": "Qual a principal exigência para o transporte regular de resíduos na sua região?",
-    "options": [
-        "A) MTR (Manifesto) e Licença da ANTT",
-        "B) Apenas Nota Fiscal de Simples Remessa",
-        "C) Alvará de Funcionamento Municipal",
-        "D) Cadastro Básico de Fornecedores"
-    ]
-}
+@st.cache_resource
+def get_shared_db():
+    return {
+        "title": "Votação de Compliance & Licenciamento",
+        "question": "Qual a principal exigência para o transporte regular de resíduos perigosos?",
+        "options": [
+            "A) MTR (Manifesto) e Licença da ANTT",
+            "B) Apenas Nota Fiscal de Simples Remessa",
+            "C) Alvará de Funcionamento Municipal",
+            "D) Cadastro Básico de Fornecedores"
+        ],
+        "votes": {0: 0, 1: 0, 2: 0, 3: 0},
+        "voted_users": set()
+    }
 
-# Armazenamento de Votos em Memória
-votes = {i: 0 for i in range(len(POLL_DATA["options"]))}
-voted_ips = set()
+db = get_shared_db()
 
-# Função para identificar o IP local do computador na rede
-def get_local_ip():
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        s.connect(('10.255.255.255', 1))
-        ip = s.getsockname()[0]
-    except Exception:
-        ip = '127.0.0.1'
-    finally:
-        s.close()
-    return ip
+if "user_token" not in st.session_state:
+    st.session_state["user_token"] = str(uuid.uuid4())
 
-# Função para gerar o QR Code em formato Base64 (100% offline)
-def generate_qr_code(url):
+user_token = st.session_state["user_token"]
+has_voted = user_token in db["voted_users"]
+
+def generate_qr(url):
     qr = qrcode.QRCode(version=1, box_size=8, border=2)
     qr.add_data(url)
     qr.make(fit=True)
     img = qr.make_image(fill_color="#0f172a", back_color="#ffffff")
-    buffered = io.BytesIO()
-    img.save(buffered, format="PNG")
-    return base64.b64encode(buffered.getvalue()).decode("utf-8")
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
 
 # ==============================================================================
-# TEMPLATE HTML: TELA DE VOTAÇÃO NO CELULAR (OFFLINE)
+# BARRA LATERAL - MENU PRINCIPAL
 # ==============================================================================
-VOTE_HTML = """
-<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Votação Interativa</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-    body { background-color: #090d16; color: #f8fafc; min-height: 100vh; display: flex; flex-direction: column; justify-content: space-between; padding: 20px; }
-    header { text-align: center; margin-bottom: 20px; border-b: 1px solid #1e293b; padding-bottom: 15px; }
-    .badge { display: inline-block; background: rgba(16, 185, 129, 0.15); color: #34d399; font-size: 12px; font-weight: bold; padding: 4px 12px; rounded: 20px; border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 20px; margin-bottom: 8px; }
-    h1 { font-size: 20px; color: #ffffff; }
-    .card { background: #0f172a; border: 1px solid #1e293b; border-radius: 16px; padding: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); }
-    .question { font-size: 17px; font-weight: 600; color: #38bdf8; margin-bottom: 20px; line-height: 1.4; }
-    .options { display: flex; flex-direction: column; gap: 12px; }
-    .btn-option { background: #1e293b; border: 2px solid #334155; color: #e2e8f0; padding: 16px; border-radius: 12px; font-size: 15px; font-weight: 600; text-align: left; cursor: pointer; transition: all 0.2s ease; display: flex; justify-content: space-between; align-items: center; }
-    .btn-option:active { transform: scale(0.98); background: #0284c7; border-color: #38bdf8; color: #ffffff; }
-    .btn-option.selected { background: #065f46; border-color: #10b981; color: #ffffff; }
-    .thank-you { display: none; text-align: center; padding: 40px 10px; }
-    .thank-you h2 { color: #34d399; font-size: 24px; margin-bottom: 10px; }
-    .thank-you p { color: #94a3b8; font-size: 14px; }
-    footer { display: flex; justify-content: space-between; font-size: 12px; color: #64748b; margin-top: 30px; font-weight: bold; }
-  </style>
-</head>
-<body>
-  <div>
-    <header>
-      <span class="badge">VOTAÇÃO OFFLINE</span>
-      <h1>{{ title }}</h1>
-    </header>
+st.sidebar.title("🛡️ Compliance Hub")
+st.sidebar.caption("Plataforma Interativa de Treinamento")
 
-    <main class="card">
-      <div id="poll-form">
-        <p class="question">{{ question }}</p>
-        <div class="options">
-          {% for option in options %}
-          <button class="btn-option" onclick="sendVote({{ loop.index0 }}, this)">
-            <span>{{ option }}</span>
-          </button>
-          {% endfor %}
+modulo = st.sidebar.radio(
+    "Selecione o Módulo:",
+    [
+        "🎯 Quiz de Compliance (Estudo)",
+        "📱 Votar pelo Celular (Ao Vivo)",
+        "📺 Painel do Telão / QR Code"
+    ]
+)
+
+st.sidebar.divider()
+st.sidebar.markdown("**Desenvolvido por:** victor & Dotta")
+
+# ==============================================================================
+# MÓDULO 1: QUIZ INTERATIVO COMPLETO (EMBUTIDO VIA HTML/JS)
+# ==============================================================================
+if modulo == "🎯 Quiz de Compliance (Estudo)":
+    st.subheader("🎯 Quiz Interativo de Compliance & Licenciamento")
+    st.caption("Responda às questões com diagnóstico imediato de fundamentação legal.")
+
+    # Código HTML/CSS/JS do Quiz embutido
+    quiz_html_code = """
+    <!DOCTYPE html>
+    <html lang="pt-BR">
+    <head>
+      <meta charset="UTF-8">
+      <script src="https://cdn.tailwindcss.com"></script>
+      <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+      <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+      <style>
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #0f172a; color: #f8fafc; }
+      </style>
+    </head>
+    <body class="p-4">
+      <div id="quiz-box" class="max-w-2xl mx-auto bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
+        <div class="flex justify-between items-center mb-4">
+          <span id="cat-badge" class="px-3 py-1 bg-emerald-500/20 text-emerald-400 text-xs font-bold rounded-full">Licenciamento</span>
+          <span id="q-count" class="text-xs text-slate-400 font-semibold">Questão 1 de 5</span>
+        </div>
+        <h3 id="q-text" class="text-lg font-bold mb-4 text-white">Carregando...</h3>
+        <div id="options" class="space-y-2 mb-4"></div>
+        <div id="exp-box" class="hidden p-3 rounded-lg bg-slate-800 border border-slate-700 text-xs text-slate-300 mb-4">
+          <strong>Explicação: </strong><span id="exp-text"></span>
+        </div>
+        <div class="flex justify-between items-center">
+          <span class="text-xs text-slate-500 font-bold">victor & Dotta</span>
+          <button id="btn-next" onclick="nextQ()" disabled class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm rounded-lg opacity-50 cursor-not-allowed">Próxima</button>
         </div>
       </div>
 
-      <div id="thank-you" class="thank-you">
-        <h2>✓ Voto Confirmado!</h2>
-        <p>Acompanhe o resultado ao vivo no telão principal.</p>
-      </div>
-    </main>
-  </div>
-
-  <footer>
-    <span>victor</span>
-    <span>Dotta</span>
-  </footer>
-
-  <script>
-    // Verifica se já votou neste celular
-    if (localStorage.getItem('has_voted')) {
-      showThankYou();
-    }
-
-    function sendVote(index, btn) {
-      if (localStorage.getItem('has_voted')) return;
-
-      btn.classList.add('selected');
-      
-      fetch('/api/vote', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ option: index })
-      })
-      .then(res => res.json())
-      .then(data => {
-        if (data.success) {
-          localStorage.setItem('has_voted', 'true');
-          setTimeout(showThankYou, 400);
-        } else {
-          alert(data.message);
-        }
-      })
-      .catch(() => alert('Erro de conexão com o servidor local.'));
-    }
-
-    function showThankYou() {
-      document.getElementById('poll-form').style.display = 'none';
-      document.getElementById('thank-you').style.display = 'block';
-    }
-  </script>
-</body>
-</html>
-"""
-
-# ==============================================================================
-# TEMPLATE HTML: PAINEL DE RESULTADOS NO PROJETOR / COMPUTADOR (`/dashboard`)
-# ==============================================================================
-DASHBOARD_HTML = """
-<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Painel em Tempo Real - Votação</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-    body { background-color: #020617; color: #f8fafc; min-height: 100vh; padding: 30px; display: flex; flex-direction: column; justify-content: space-between; }
-    header { display: flex; justify-content: space-between; align-items: center; border-b: 1px solid #1e293b; padding-bottom: 20px; margin-bottom: 30px; }
-    h1 { font-size: 28px; color: #ffffff; }
-    .total-badge { background: #0284c7; color: #ffffff; padding: 8px 18px; border-radius: 30px; font-weight: bold; font-size: 16px; }
-    
-    .main-grid { display: grid; grid-template-columns: 320px 1fr; gap: 40px; align-items: start; }
-    
-    .qr-card { background: #0f172a; border: 1px solid #1e293b; border-radius: 20px; padding: 25px; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.6); }
-    .qr-card img { width: 100%; max-width: 240px; border-radius: 12px; margin: 15px 0; border: 4px solid #ffffff; }
-    .qr-url { background: #1e293b; color: #38bdf8; font-family: monospace; padding: 10px; border-radius: 8px; font-size: 15px; font-weight: bold; word-break: break-all; }
-    
-    .results-card { background: #0f172a; border: 1px solid #1e293b; border-radius: 20px; padding: 30px; box-shadow: 0 10px 30px rgba(0,0,0,0.6); }
-    .question-title { font-size: 22px; font-weight: bold; color: #38bdf8; margin-bottom: 25px; }
-    
-    .bar-group { margin-bottom: 20px; }
-    .bar-header { display: flex; justify-content: space-between; font-weight: 600; font-size: 16px; margin-bottom: 8px; }
-    .bar-bg { background: #1e293b; height: 28px; border-radius: 8px; overflow: hidden; position: relative; }
-    .bar-fill { background: linear-gradient(90deg, #0284c7, #10b981); height: 100%; width: 0%; transition: width 0.5s ease; border-radius: 8px; }
-    
-    .winner-highlight { border: 2px solid #10b981 !important; background: rgba(16, 185, 129, 0.05); }
-    
-    .controls { margin-top: 25px; display: flex; gap: 15px; }
-    .btn { padding: 12px 24px; border-radius: 10px; border: none; font-weight: bold; cursor: pointer; font-size: 14px; transition: 0.2s; }
-    .btn-reset { background: #ef4444; color: white; }
-    .btn-reset:hover { background: #dc2626; }
-    
-    footer { display: flex; justify-content: space-between; font-size: 14px; color: #64748b; font-weight: bold; border-t: 1px solid #1e293b; padding-top: 20px; margin-top: 30px; }
-  </style>
-</head>
-<body>
-  <div>
-    <header>
-      <div>
-        <h1>{{ title }}</h1>
-        <p style="color: #94a3b8; font-size: 14px; margin-top: 4px;">Painel Transmissor Local (Offline)</p>
-      </div>
-      <div class="total-badge">Total de Votos: <span id="total-votes">0</span></div>
-    </header>
-
-    <div class="main-grid">
-      <!-- Card do QR Code -->
-      <div class="qr-card">
-        <h3 style="font-size: 16px; color: #f8fafc;">Escaneie para Votar</h3>
-        <img src="data:image/png;base64,{{ qr_code }}" alt="QR Code Votação">
-        <p style="font-size: 12px; color: #94a3b8; margin-bottom: 8px;">Ou acesse pelo celular:</p>
-        <div class="qr-url">{{ server_url }}</div>
+      <div id="result-box" class="hidden max-w-2xl mx-auto bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl text-center">
+        <h2 class="text-2xl font-bold text-white mb-2">Resultado Final</h2>
+        <p id="score-val" class="text-4xl font-extrabold text-emerald-400 mb-4">0/5</p>
+        <button onclick="restart()" class="px-6 py-2 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-lg text-sm border border-slate-700">Refazer Quiz</button>
       </div>
 
-      <!-- Placar dos Resultados -->
-      <div class="results-card">
-        <div class="question-title">{{ question }}</div>
-        
-        <div id="results-container">
-          {% for option in options %}
-          <div class="bar-group" id="group-{{ loop.index0 }}">
-            <div class="bar-header">
-              <span>{{ option }}</span>
-              <span id="text-{{ loop.index0 }}">0 votos (0%)</span>
-            </div>
-            <div class="bar-bg">
-              <div class="bar-fill" id="bar-{{ loop.index0 }}"></div>
-            </div>
-          </div>
-          {% endfor %}
-        </div>
+      <script>
+        const questions = [
+          { category: "Transporte & Fisco", q: "Qual documento é obrigatório para o transporte terrestre de resíduos perigosos?", opts: ["Apenas Nota Fiscal", "MTR (Manifesto) e Ficha de Emergência", "Certificado DETRAN", "Alvará Municipal"], correct: 1, exp: "O MTR emitido via SINIR é obrigatório para o rastreio de resíduos perigosos." },
+          { category: "Licenciamento", q: "Qual licença autoriza o início efetivo das operações da empresa?", opts: ["Licença Prévia (LP)", "Licença de Instalação (LI)", "Licença de Operação (LO)", "Cadastro Técnico"], correct: 2, exp: "A Licença de Operação (LO) autoriza o funcionamento oficial do empreendimento." },
+          { category: "Documentação Fiscal", q: "Qual documento fiscal acoberta a prestação do serviço de frete rodoviário?", opts: ["CT-e / MDF-e", "RPS Simples", "Declaração de Isenção", "Ordem de Serviço"], correct: 0, exp: "O Conhecimento de Transporte Eletrônico (CT-e) é a norma fiscal oficial." },
+          { category: "Destinação Final", q: "Qual documento comprova o descarte ambientalmente adequado do resíduo?", opts: ["Certificado de Destinação Final (CDF)", "Contrato Social", "Comprovante de Pedágio", "Cadastro de Cliente"], correct: 0, exp: "O CDF emitido pelo destinador homologado comprova a destinação final ambiental." },
+          { category: "ANTT", q: "Qual o registro obrigatório para transportadores de cargas perigosas na ANTT?", opts: ["RNTRC", "CREA", "Seguro RCF", "Alvará de Ambulante"], correct: 0, exp: "O RNTRC é o registro obrigatório fiscalizado pela ANTT." }
+        ];
 
-        <div class="controls">
-          <button class="btn btn-reset" onclick="resetVotes()">Zerar Votação</button>
-        </div>
-      </div>
-    </div>
-  </div>
+        let curr = 0, score = 0, answered = false;
 
-  <footer>
-    <span>victor</span>
-    <span>Dotta</span>
-  </footer>
-
-  <script>
-    function updateResults() {
-      fetch('/api/results')
-        .then(res => res.json())
-        .then(data => {
-          document.getElementById('total-votes').textContent = data.total;
+        function load() {
+          answered = false;
+          document.getElementById('btn-next').disabled = true;
+          document.getElementById('btn-next').classList.add('opacity-50', 'cursor-not-allowed');
+          document.getElementById('exp-box').classList.add('hidden');
           
-          let maxVotes = -1;
-          let winnerIndex = -1;
-
-          // Descobre o vencedor
-          data.votes.forEach((count, i) => {
-            if (count > maxVotes && count > 0) {
-              maxVotes = count;
-              winnerIndex = i;
-            }
+          const q = questions[curr];
+          document.getElementById('cat-badge').textContent = q.category;
+          document.getElementById('q-count').textContent = `Questão ${curr + 1} de ${questions.length}`;
+          document.getElementById('q-text').textContent = q.q;
+          
+          const container = document.getElementById('options');
+          container.innerHTML = '';
+          q.opts.forEach((opt, i) => {
+            const btn = document.createElement('button');
+            btn.className = "w-full p-3 text-left rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-sm font-medium transition";
+            btn.textContent = opt;
+            btn.onclick = () => select(i, btn);
+            container.appendChild(btn);
           });
+        }
 
-          data.votes.forEach((count, i) => {
-            const pct = data.total > 0 ? Math.round((count / data.total) * 100) : 0;
-            document.getElementById(`bar-${i}`).style.width = pct + '%';
-            document.getElementById(`text-${i}`).textContent = `${count} votos (${pct}%)`;
+        function select(idx, btn) {
+          if (answered) return;
+          answered = true;
+          const q = questions[curr];
+          const allBtns = document.getElementById('options').children;
 
-            const groupEl = document.getElementById(`group-${i}`);
-            if (i === winnerIndex && data.total > 0) {
-              groupEl.classList.add('winner-highlight');
-            } else {
-              groupEl.classList.remove('winner-highlight');
-            }
-          });
-        });
-    }
+          if (idx === q.correct) {
+            score++;
+            btn.className = "w-full p-3 text-left rounded-lg bg-emerald-950 border-2 border-emerald-500 text-emerald-200 text-sm font-bold";
+          } else {
+            btn.className = "w-full p-3 text-left rounded-lg bg-rose-950 border-2 border-rose-500 text-rose-200 text-sm font-bold";
+            allBtns[q.correct].className = "w-full p-3 text-left rounded-lg bg-emerald-950 border-2 border-emerald-500 text-emerald-200 text-sm font-bold";
+          }
 
-    function resetVotes() {
-      if (confirm('Deseja zerar todos os votos acumulados?')) {
-        fetch('/api/reset', { method: 'POST' }).then(() => updateResults());
-      }
-    }
+          document.getElementById('exp-text').textContent = q.exp;
+          document.getElementById('exp-box').classList.remove('hidden');
+          
+          const nextBtn = document.getElementById('btn-next');
+          nextBtn.disabled = false;
+          nextBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+        }
 
-    // Atualiza o placar a cada 1.5 segundos
-    setInterval(updateResults, 1500);
-    updateResults();
-  </script>
-</body>
-</html>
-"""
+        function nextQ() {
+          curr++;
+          if (curr < questions.length) {
+            load();
+          } else {
+            document.getElementById('quiz-box').classList.add('hidden');
+            document.getElementById('result-box').classList.remove('hidden');
+            document.getElementById('score-val').textContent = `${score}/${questions.length}`;
+          }
+        }
+
+        function restart() {
+          curr = 0; score = 0;
+          document.getElementById('result-box').classList.add('hidden');
+          document.getElementById('quiz-box').classList.remove('hidden');
+          load();
+        }
+
+        load();
+      </script>
+    </body>
+    </html>
+    """
+    components.html(quiz_html_code, height=520, scrolling=False)
 
 # ==============================================================================
-# ROTAS DA APLICAÇÃO FLASK
+# MÓDULO 2: VOTAÇÃO PELO CELULAR
 # ==============================================================================
+elif modulo == "📱 Votar pelo Celular (Ao Vivo)":
+    st.title(db["title"])
+    st.caption("Conectado via internet no celular")
+    st.divider()
 
-@app.route('/')
-def vote_page():
-    return render_template_string(VOTE_HTML, title=POLL_DATA["title"], question=POLL_DATA["question"], options=POLL_DATA["options"])
+    if has_voted:
+        st.success("✅ **Seu voto foi registrado com sucesso!**")
+        st.info("Acompanhe o gráfico de apuração ao vivo na tela principal do telão.")
+        if st.button("🔄 Atualizar Visualização"):
+            st.rerun()
+    else:
+        st.subheader(db["question"])
+        st.write("Escolha uma opção:")
 
-@app.route('/dashboard')
-def dashboard_page():
-    ip = get_local_ip()
-    server_url = f"http://{ip}:5000"
-    qr_b64 = generate_qr_code(server_url)
-    return render_template_string(DASHBOARD_HTML, title=POLL_DATA["title"], question=POLL_DATA["question"], options=POLL_DATA["options"], qr_code=qr_b64, server_url=server_url)
+        selected_option = st.radio(
+            "Opções disponíveis:",
+            options=list(range(len(db["options"]))),
+            format_func=lambda i: db["options"][i],
+            index=None
+        )
 
-@app.route('/api/vote', methods=['POST'])
-def handle_vote():
-    data = request.get_json()
-    opt_index = data.get('option')
-    user_ip = request.remote_addr
+        if st.button("📥 Confirmar Voto", type="primary", use_container_width=True):
+            if selected_option is not None:
+                db["votes"][selected_option] += 1
+                db["voted_users"].add(user_token)
+                st.success("Voto computado!")
+                st.rerun()
+            else:
+                st.warning("Selecione uma opção antes de confirmar.")
 
-    if user_ip in voted_ips:
-        return jsonify({"success": False, "message": "Você já votou a partir deste dispositivo."})
-
-    if opt_index is not None and 0 <= opt_index < len(POLL_DATA["options"]):
-        votes[opt_index] += 1
-        voted_ips.add(user_ip)
-        return jsonify({"success": True})
+# ==============================================================================
+# MÓDULO 3: PAINEL DO TELÃO (RESULTADOS E QR CODE)
+# ==============================================================================
+else:
+    st.title("📺 Painel de Apuração ao Vivo")
     
-    return jsonify({"success": False, "message": "Opção inválida."})
+    col_left, col_right = st.columns([1, 2])
 
-@app.route('/api/results')
-def get_results():
-    total = sum(votes.values())
-    return jsonify({"votes": [votes[i] for i in range(len(POLL_DATA["options"]))], "total": total})
+    with col_left:
+        st.subheader("📱 Escaneie para Votar")
+        
+        # Link do seu site no Streamlit Cloud
+        app_url = st.text_input(
+            "Cole a URL pública do seu app:",
+            value="https://seu-app.streamlit.app"
+        )
+        
+        qr_bytes = generate_qr(app_url)
+        st.image(qr_bytes, caption="Aponta a câmera para votar", width=240)
+        
+        total_votes = sum(db["votes"].values())
+        st.metric(label="Total de Votos Computados", value=total_votes)
 
-@app.route('/api/reset', methods=['POST'])
-def reset_poll():
-    global votes, voted_ips
-    votes = {i: 0 for i in range(len(POLL_DATA["options"]))}
-    voted_ips.clear()
-    return jsonify({"success": True})
+        if st.button("🚨 Zerar Votação", type="secondary"):
+            db["votes"] = {i: 0 for i in range(len(db["options"]))}
+            db["voted_users"].clear()
+            st.success("Votação zerada!")
+            st.rerun()
 
-# ==============================================================================
-# EXECUÇÃO DO SERVIDOR LOCAL (0.0.0.0 PERMITE ACESSO PELA REDE WI-FI)
-# ==============================================================================
-if __name__ == '__main__':
-    local_ip = get_local_ip()
-    print("\n" + "="*60)
-    print(" SERVIDOR DE VOTAÇÃO OFFLINE INICIADO COM SUCESSO!")
-    print("="*60)
-    print(f" ► NO COMPUTADOR / PROJETOR, ABRA:  http://localhost:5000/dashboard")
-    print(f" ► LINK DA REDE LOCAL (CELULARES):   http://{local_ip}:5000")
-    print("="*60 + "\n")
-    
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    with col_right:
+        st.subheader(db["question"])
+        st.divider()
+
+        total_votes = sum(db["votes"].values())
+        max_votes = max(db["votes"].values()) if total_votes > 0 else -1
+
+        for i, option_text in enumerate(db["options"]):
+            count = db["votes"][i]
+            pct = round((count / total_votes) * 100) if total_votes > 0 else 0
+            
+            is_winner = (count == max_votes and max_votes > 0)
+            prefix = "🏆 " if is_winner else ""
+            
+            st.write(f"**{prefix}{option_text}**")
+            st.progress(pct / 100)
+            st.caption(f"{count} votos ({pct}%)")
+            st.write("")
+
+        if st.button("🔄 Atualizar Placar Ao Vivo", use_container_width=True):
+            st.rerun()

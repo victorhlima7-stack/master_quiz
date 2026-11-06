@@ -1,43 +1,91 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import qrcode
 from io import BytesIO
-import uuid
+import datetime
 
 # Configuração Geral da Página
 st.set_page_config(
-    page_title="Plataforma de Compliance & Votação",
+    page_title="Plataforma de Compliance & Ranking",
     page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 # ==============================================================================
-# BANCO DE DADOS EM MEMÓRIA PARA A VOTAÇÃO AO VIVO
+# BANCO DE DADOS EM MEMÓRIA COMPARTILHADO ENTRE TODOS OS CELULARES
 # ==============================================================================
 @st.cache_resource
 def get_shared_db():
     return {
-        "title": "Votação de Compliance & Licenciamento",
-        "question": "Qual a principal exigência para o transporte regular de resíduos perigosos?",
-        "options": [
-            "A) MTR (Manifesto) e Licença da ANTT",
-            "B) Apenas Nota Fiscal de Simples Remessa",
-            "C) Alvará de Funcionamento Municipal",
-            "D) Cadastro Básico de Fornecedores"
+        "questions": [
+            {
+                "category": "Transporte de Resíduos",
+                "question": "Qual documento ambiental é obrigatório para o transporte terrestre de resíduos perigosos no Brasil?",
+                "options": [
+                    "Apenas a Nota Fiscal da empresa geradora",
+                    "Manifesto de Transporte de Resíduos (MTR) e Ficha de Emergência",
+                    "Certificado de Registro Cadastral do DETRAN",
+                    "Alvará de Funcionamento Municipal simples"
+                ],
+                "correct": 1,
+                "explanation": "O MTR emitido via SINIR é o documento nacional obrigatório para o rastreamento de resíduos perigosos."
+            },
+            {
+                "category": "Licenciamento Ambiental",
+                "question": "Qual etapa do Licenciamento Ambiental autoriza o início efetivo das operações da empresa?",
+                "options": [
+                    "Licença Prévia (LP)",
+                    "Licença de Instalação (LI)",
+                    "Licença de Operação (LO)",
+                    "Cadastro Técnico Federal (CTF)"
+                ],
+                "correct": 2,
+                "explanation": "A Licença de Operação (LO) autoriza o funcionamento oficial da atividade após a verificação das exigências."
+            },
+            {
+                "category": "Documentação Fiscal",
+                "question": "Qual documento fiscal acoberta a prestação do serviço de frete rodoviário de resíduos?",
+                "options": [
+                    "Conhecimento de Transporte Eletrônico (CT-e) / MDF-e",
+                    "Recibo de Prestação de Serviços (RPS) simples",
+                    "Declaração de Isenção de Inscrição Estadual",
+                    "Ordem de Serviço de Oficina"
+                ],
+                "correct": 0,
+                "explanation": "O CT-e e o MDF-e são os documentos fiscais hábeis exigidos pelo Fisco para serviços de frete."
+            },
+            {
+                "category": "Destinação Final",
+                "question": "Qual documento comprova o correto descarte e tratamento final do resíduo?",
+                "options": [
+                    "Certificado de Destinação Final (CDF)",
+                    "Cópia do Contrato Social do Destinador",
+                    "Comprovante de Pagamento do Pedágio",
+                    "Ficha de Cadastro de Clientes"
+                ],
+                "correct": 0,
+                "explanation": "O CDF emitido pelo destinador homologado comprova juridicamente a destinação ambientalmente adequada."
+            },
+            {
+                "category": "Regulamentação ANTT",
+                "question": "Veículos que transportam cargas e resíduos perigosos precisam ter qual cadastro ativo?",
+                "options": [
+                    "RNTRC (Registro Nacional de Transportadores Rodoviários de Cargas) da ANTT",
+                    "Inscrição no Conselho Regional de Engenharia (CREA)",
+                    "Apenas Seguro Contra Terceiros (RCF)",
+                    "Licença Comercial de Vendedor Ambulante"
+                ],
+                "correct": 0,
+                "explanation": "O RNTRC é o registro obrigatório para transportadores de carga fiscalizado pela ANTT."
+            }
         ],
-        "votes": {0: 0, 1: 0, 2: 0, 3: 0},
-        "voted_users": set()
+        # Armazena o ranking: {"nickname": {"score": X, "total": Y, "time": "14:30"}}
+        "leaderboard": {}
     }
 
 db = get_shared_db()
 
-if "user_token" not in st.session_state:
-    st.session_state["user_token"] = str(uuid.uuid4())
-
-user_token = st.session_state["user_token"]
-has_voted = user_token in db["voted_users"]
-
+# Gerador de QR Code
 def generate_qr(url):
     qr = qrcode.QRCode(version=1, box_size=8, border=2)
     qr.add_data(url)
@@ -48,17 +96,17 @@ def generate_qr(url):
     return buf.getvalue()
 
 # ==============================================================================
-# BARRA LATERAL - MENU PRINCIPAL
+# MENU LATERAL
 # ==============================================================================
 st.sidebar.title("🛡️ Compliance Hub")
-st.sidebar.caption("Plataforma Interativa de Treinamento")
+st.sidebar.caption("Sistema de Quiz & Ranking ao Vivo")
 
 modulo = st.sidebar.radio(
-    "Selecione o Módulo:",
+    "Selecione o Painel:",
     [
-        "🎯 Quiz de Compliance (Estudo)",
-        "📱 Votar pelo Celular (Ao Vivo)",
-        "📺 Painel do Telão / QR Code"
+        "📱 Responder Quiz (Celular)",
+        "🏆 Ranking de Acertos (Telão/Admin)",
+        "📺 QR Code para Acesso"
     ]
 )
 
@@ -66,208 +114,189 @@ st.sidebar.divider()
 st.sidebar.markdown("**Desenvolvido por:** victor & Dotta")
 
 # ==============================================================================
-# MÓDULO 1: QUIZ INTERATIVO COMPLETO (EMBUTIDO VIA HTML/JS)
+# PAINEL 1: RESPONDER QUIZ NO CELULAR (COM NICKNAME)
 # ==============================================================================
-if modulo == "🎯 Quiz de Compliance (Estudo)":
-    st.subheader("🎯 Quiz Interativo de Compliance & Licenciamento")
-    st.caption("Responda às questões com diagnóstico imediato de fundamentação legal.")
+if modulo == "📱 Responder Quiz (Celular)":
+    st.title("🎯 Quiz de Compliance")
 
-    # Código HTML/CSS/JS do Quiz embutido
-    quiz_html_code = """
-    <!DOCTYPE html>
-    <html lang="pt-BR">
-    <head>
-      <meta charset="UTF-8">
-      <script src="https://cdn.tailwindcss.com"></script>
-      <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-      <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
-      <style>
-        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #0f172a; color: #f8fafc; }
-      </style>
-    </head>
-    <body class="p-4">
-      <div id="quiz-box" class="max-w-2xl mx-auto bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
-        <div class="flex justify-between items-center mb-4">
-          <span id="cat-badge" class="px-3 py-1 bg-emerald-500/20 text-emerald-400 text-xs font-bold rounded-full">Licenciamento</span>
-          <span id="q-count" class="text-xs text-slate-400 font-semibold">Questão 1 de 5</span>
-        </div>
-        <h3 id="q-text" class="text-lg font-bold mb-4 text-white">Carregando...</h3>
-        <div id="options" class="space-y-2 mb-4"></div>
-        <div id="exp-box" class="hidden p-3 rounded-lg bg-slate-800 border border-slate-700 text-xs text-slate-300 mb-4">
-          <strong>Explicação: </strong><span id="exp-text"></span>
-        </div>
-        <div class="flex justify-between items-center">
-          <span class="text-xs text-slate-500 font-bold">victor & Dotta</span>
-          <button id="btn-next" onclick="nextQ()" disabled class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm rounded-lg opacity-50 cursor-not-allowed">Próxima</button>
-        </div>
-      </div>
-
-      <div id="result-box" class="hidden max-w-2xl mx-auto bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl text-center">
-        <h2 class="text-2xl font-bold text-white mb-2">Resultado Final</h2>
-        <p id="score-val" class="text-4xl font-extrabold text-emerald-400 mb-4">0/5</p>
-        <button onclick="restart()" class="px-6 py-2 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-lg text-sm border border-slate-700">Refazer Quiz</button>
-      </div>
-
-      <script>
-        const questions = [
-          { category: "Transporte & Fisco", q: "Qual documento é obrigatório para o transporte terrestre de resíduos perigosos?", opts: ["Apenas Nota Fiscal", "MTR (Manifesto) e Ficha de Emergência", "Certificado DETRAN", "Alvará Municipal"], correct: 1, exp: "O MTR emitido via SINIR é obrigatório para o rastreio de resíduos perigosos." },
-          { category: "Licenciamento", q: "Qual licença autoriza o início efetivo das operações da empresa?", opts: ["Licença Prévia (LP)", "Licença de Instalação (LI)", "Licença de Operação (LO)", "Cadastro Técnico"], correct: 2, exp: "A Licença de Operação (LO) autoriza o funcionamento oficial do empreendimento." },
-          { category: "Documentação Fiscal", q: "Qual documento fiscal acoberta a prestação do serviço de frete rodoviário?", opts: ["CT-e / MDF-e", "RPS Simples", "Declaração de Isenção", "Ordem de Serviço"], correct: 0, exp: "O Conhecimento de Transporte Eletrônico (CT-e) é a norma fiscal oficial." },
-          { category: "Destinação Final", q: "Qual documento comprova o descarte ambientalmente adequado do resíduo?", opts: ["Certificado de Destinação Final (CDF)", "Contrato Social", "Comprovante de Pedágio", "Cadastro de Cliente"], correct: 0, exp: "O CDF emitido pelo destinador homologado comprova a destinação final ambiental." },
-          { category: "ANTT", q: "Qual o registro obrigatório para transportadores de cargas perigosas na ANTT?", opts: ["RNTRC", "CREA", "Seguro RCF", "Alvará de Ambulante"], correct: 0, exp: "O RNTRC é o registro obrigatório fiscalizado pela ANTT." }
-        ];
-
-        let curr = 0, score = 0, answered = false;
-
-        function load() {
-          answered = false;
-          document.getElementById('btn-next').disabled = true;
-          document.getElementById('btn-next').classList.add('opacity-50', 'cursor-not-allowed');
-          document.getElementById('exp-box').classList.add('hidden');
-          
-          const q = questions[curr];
-          document.getElementById('cat-badge').textContent = q.category;
-          document.getElementById('q-count').textContent = `Questão ${curr + 1} de ${questions.length}`;
-          document.getElementById('q-text').textContent = q.q;
-          
-          const container = document.getElementById('options');
-          container.innerHTML = '';
-          q.opts.forEach((opt, i) => {
-            const btn = document.createElement('button');
-            btn.className = "w-full p-3 text-left rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-sm font-medium transition";
-            btn.textContent = opt;
-            btn.onclick = () => select(i, btn);
-            container.appendChild(btn);
-          });
-        }
-
-        function select(idx, btn) {
-          if (answered) return;
-          answered = true;
-          const q = questions[curr];
-          const allBtns = document.getElementById('options').children;
-
-          if (idx === q.correct) {
-            score++;
-            btn.className = "w-full p-3 text-left rounded-lg bg-emerald-950 border-2 border-emerald-500 text-emerald-200 text-sm font-bold";
-          } else {
-            btn.className = "w-full p-3 text-left rounded-lg bg-rose-950 border-2 border-rose-500 text-rose-200 text-sm font-bold";
-            allBtns[q.correct].className = "w-full p-3 text-left rounded-lg bg-emerald-950 border-2 border-emerald-500 text-emerald-200 text-sm font-bold";
-          }
-
-          document.getElementById('exp-text').textContent = q.exp;
-          document.getElementById('exp-box').classList.remove('hidden');
-          
-          const nextBtn = document.getElementById('btn-next');
-          nextBtn.disabled = false;
-          nextBtn.classList.remove('opacity-50', 'cursor-not-allowed');
-        }
-
-        function nextQ() {
-          curr++;
-          if (curr < questions.length) {
-            load();
-          } else {
-            document.getElementById('quiz-box').classList.add('hidden');
-            document.getElementById('result-box').classList.remove('hidden');
-            document.getElementById('score-val').textContent = `${score}/${questions.length}`;
-          }
-        }
-
-        function restart() {
-          curr = 0; score = 0;
-          document.getElementById('result-box').classList.add('hidden');
-          document.getElementById('quiz-box').classList.remove('hidden');
-          load();
-        }
-
-        load();
-      </script>
-    </body>
-    </html>
-    """
-    components.html(quiz_html_code, height=520, scrolling=False)
-
-# ==============================================================================
-# MÓDULO 2: VOTAÇÃO PELO CELULAR
-# ==============================================================================
-elif modulo == "📱 Votar pelo Celular (Ao Vivo)":
-    st.title(db["title"])
-    st.caption("Conectado via internet no celular")
-    st.divider()
-
-    if has_voted:
-        st.success("✅ **Seu voto foi registrado com sucesso!**")
-        st.info("Acompanhe o gráfico de apuração ao vivo na tela principal do telão.")
-        if st.button("🔄 Atualizar Visualização"):
-            st.rerun()
-    else:
-        st.subheader(db["question"])
-        st.write("Escolha uma opção:")
-
-        selected_option = st.radio(
-            "Opções disponíveis:",
-            options=list(range(len(db["options"]))),
-            format_func=lambda i: db["options"][i],
-            index=None
-        )
-
-        if st.button("📥 Confirmar Voto", type="primary", use_container_width=True):
-            if selected_option is not None:
-                db["votes"][selected_option] += 1
-                db["voted_users"].add(user_token)
-                st.success("Voto computado!")
+    # Passo 1: Cadastro de Nickname
+    if "user_nickname" not in st.session_state:
+        st.subheader("Para começar, digite seu Apelido / Nickname:")
+        
+        nick_input = st.text_input("Seu Nickname:", placeholder="Ex: Victor_Compliance", max_chars=20)
+        
+        if st.button("🚀 Iniciar Quiz", type="primary", use_container_width=True):
+            if nick_input.strip() != "":
+                st.session_state["user_nickname"] = nick_input.strip()
+                st.session_state["quiz_step"] = 0
+                st.session_state["score"] = 0
+                st.session_state["answered"] = False
                 st.rerun()
             else:
-                st.warning("Selecione uma opção antes de confirmar.")
+                st.warning("Por favor, digite um nickname válido.")
+
+    # Passo 2: Execução do Quiz
+    else:
+        nickname = st.session_state["user_nickname"]
+        step = st.session_state.get("quiz_step", 0)
+        questions = db["questions"]
+
+        # Se já respondeu todas as perguntas
+        if step >= len(questions):
+            st.balloons()
+            st.success(f"🎉 **Parabéns, {nickname}! Você concluiu o Quiz!**")
+            
+            final_score = st.session_state["score"]
+            total = len(questions)
+            pct = round((final_score / total) * 100)
+            
+            st.metric("Sua Pontuação Final", f"{final_score} de {total} ({pct}%)")
+
+            # Salva a pontuação no banco compartilhado
+            db["leaderboard"][nickname] = {
+                "score": final_score,
+                "total": total,
+                "percentage": pct,
+                "time": datetime.datetime.now().strftime("%H:%M:%S")
+            }
+
+            st.info("Acompanhe a sua posição no Ranking Geral exibido no Telão!")
+
+            if st.button("🔄 Responder Novamente com outro Nickname"):
+                del st.session_state["user_nickname"]
+                st.rerun()
+
+        # Apresentação da pergunta atual
+        else:
+            q = questions[step]
+            
+            st.caption(f"Participante: **{nickname}** | Questão {step + 1} de {len(questions)}")
+            st.progress((step) / len(questions))
+            
+            st.markdown(f"**[{q['category']}]**")
+            st.subheader(q["question"])
+
+            # Opções de Resposta
+            selected_option = st.radio(
+                "Selecione a alternativa correta:",
+                options=list(range(len(q["options"]))),
+                format_func=lambda i: q["options"][i],
+                index=None,
+                disabled=st.session_state.get("answered", False)
+            )
+
+            # Botão de confirmação de resposta
+            if not st.session_state.get("answered", False):
+                if st.button("Confirmar Resposta", type="primary", use_container_width=True):
+                    if selected_option is not None:
+                        st.session_state["answered"] = True
+                        st.session_state["last_selected"] = selected_option
+                        if selected_option == q["correct"]:
+                            st.session_state["score"] += 1
+                        st.rerun()
+                    else:
+                        st.warning("Escolha uma alternativa antes de confirmar.")
+
+            # Exibição do feedback pós-resposta
+            else:
+                last_sel = st.session_state.get("last_selected")
+                if last_sel == q["correct"]:
+                    st.success("✅ **Resposta Correta!**")
+                else:
+                    st.error(f"❌ **Resposta Incorreta!** A opção certa era: {q['options'][q['correct']]}")
+
+                st.info(f"💡 **Fundamentação:** {q['explanation']}")
+
+                if st.button("Próxima Questão ➔", type="primary", use_container_width=True):
+                    st.session_state["quiz_step"] += 1
+                    st.session_state["answered"] = False
+                    st.rerun()
 
 # ==============================================================================
-# MÓDULO 3: PAINEL DO TELÃO (RESULTADOS E QR CODE)
+# PAINEL 2: RANKING AO VIVO (EXIBIDO NO TELÃO / PROJETOR)
+# ==============================================================================
+elif modulo == "🏆 Ranking de Acertos (Telão/Admin)":
+    st.title("🏆 Ranking de Desempenho ao Vivo")
+    st.caption("Classificação dos participantes que responderam pelo celular")
+    st.divider()
+
+    leaderboard = db["leaderboard"]
+
+    if not leaderboard:
+        st.info("Ainda nenhum participante concluiu o quiz. Os resultados aparecerão aqui em tempo real assim que os envios começarem!")
+    else:
+        # Ordena o ranking por maior pontuação (e maior porcentagem)
+        sorted_ranking = sorted(
+            leaderboard.items(),
+            key=lambda item: (item[1]["score"], item[1]["percentage"]),
+            reverse=True
+        )
+
+        # Destaque dos 3 Primeiros Colocados
+        col1, col2, col3 = st.columns(3)
+        
+        if len(sorted_ranking) >= 1:
+            p1_name, p1_data = sorted_ranking[0]
+            col1.metric("🥇 1º Lugar", p1_name, f"{p1_data['score']}/{p1_data['total']} acertos ({p1_data['percentage']}%)")
+        
+        if len(sorted_ranking) >= 2:
+            p2_name, p2_data = sorted_ranking[1]
+            col2.metric("🥈 2º Lugar", p2_name, f"{p2_data['score']}/{p2_data['total']} acertos ({p2_data['percentage']}%)")
+            
+        if len(sorted_ranking) >= 3:
+            p3_name, p3_data = sorted_ranking[2]
+            col3.metric("🥉 3º Lugar", p3_name, f"{p3_data['score']}/{p3_data['total']} acertos ({p3_data['percentage']}%)")
+
+        st.divider()
+        st.subheader("📋 Tabela Geral de Pontuação")
+
+        # Monta a tabela geral
+        ranking_table = []
+        for rank, (nick, data) in enumerate(sorted_ranking, 1):
+            ranking_table.append({
+                "Posição": f"#{rank}",
+                "Nickname": nick,
+                "Acertos": f"{data['score']} / {data['total']}",
+                "Aproveitamento": f"{data['percentage']}%",
+                "Horário de Envio": data['time']
+            })
+
+        st.table(ranking_table)
+
+    st.divider()
+    col_act1, col_act2 = st.columns([2, 1])
+    with col_act1:
+        if st.button("🔄 Atualizar Ranking Manualmente", use_container_width=True):
+            st.rerun()
+    with col_act2:
+        if st.button("🚨 Zerar Ranking / Novo Raciocínio", type="secondary", use_container_width=True):
+            db["leaderboard"].clear()
+            st.success("Ranking zerado com sucesso!")
+            st.rerun()
+
+# ==============================================================================
+# PAINEL 3: QR CODE PARA OS CELULARES
 # ==============================================================================
 else:
-    st.title("📺 Painel de Apuração ao Vivo")
-    
-    col_left, col_right = st.columns([1, 2])
+    st.title("📺 Acesso à Votação & Quiz")
+    st.caption("Projete este QR Code na tela para os participantes escanearem")
+    st.divider()
 
-    with col_left:
-        st.subheader("📱 Escaneie para Votar")
-        
-        # Link do seu site no Streamlit Cloud
+    col_qr, col_info = st.columns([1, 2])
+
+    with col_qr:
         app_url = st.text_input(
-            "Cole a URL pública do seu app:",
+            "Cole o link público do seu app no Streamlit Cloud:",
             value="https://seu-app.streamlit.app"
         )
-        
         qr_bytes = generate_qr(app_url)
-        st.image(qr_bytes, caption="Aponta a câmera para votar", width=240)
-        
-        total_votes = sum(db["votes"].values())
-        st.metric(label="Total de Votos Computados", value=total_votes)
+        st.image(qr_bytes, caption="Escaneie para informar o Nickname e iniciar", width=280)
 
-        if st.button("🚨 Zerar Votação", type="secondary"):
-            db["votes"] = {i: 0 for i in range(len(db["options"]))}
-            db["voted_users"].clear()
-            st.success("Votação zerada!")
-            st.rerun()
-
-    with col_right:
-        st.subheader(db["question"])
-        st.divider()
-
-        total_votes = sum(db["votes"].values())
-        max_votes = max(db["votes"].values()) if total_votes > 0 else -1
-
-        for i, option_text in enumerate(db["options"]):
-            count = db["votes"][i]
-            pct = round((count / total_votes) * 100) if total_votes > 0 else 0
-            
-            is_winner = (count == max_votes and max_votes > 0)
-            prefix = "🏆 " if is_winner else ""
-            
-            st.write(f"**{prefix}{option_text}**")
-            st.progress(pct / 100)
-            st.caption(f"{count} votos ({pct}%)")
-            st.write("")
-
-        if st.button("🔄 Atualizar Placar Ao Vivo", use_container_width=True):
-            st.rerun()
+    with col_info:
+        st.subheader("Instruções para a Plenária:")
+        st.markdown("""
+        1. Aponte a câmera do celular para o **QR Code ao lado**.
+        2. Digite seu **Apelido / Nickname** ao abrir a página.
+        3. Responda às **5 questões de Compliance**.
+        4. Confira a sua colocação final no **Ranking em Tempo Real** do telão!
+        """)

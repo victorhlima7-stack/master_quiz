@@ -12,12 +12,12 @@ st.set_page_config(
 )
 
 # ==============================================================================
-# BANCO DE DADOS EM MEMÓRIA COMPARTILHADO (PERGUNTAS ATUALIZADAS)
+# BANCO DE DADOS EM MEMÓRIA COMPARTILHADO
 # ==============================================================================
 @st.cache_resource
 def get_shared_db():
     return {
-        # 5 PERGUNTAS DO SEU ARQUIVO
+        # 5 PERGUNTAS REGULARES
         "questions": [
             {
                 "category": "Transporte de Resíduos",
@@ -119,64 +119,4 @@ def check_top_tie():
 # MENU LATERAL
 # ==============================================================================
 st.sidebar.title("🛡️ Compliance Hub")
-st.sidebar.caption("Quiz Midori & Desempate")
-
-modulo = st.sidebar.radio(
-    "Selecione o Painel:",
-    [
-        "📱 Responder Quiz (Celular)",
-        "🏆 Ranking de Acertos (Telão/Admin)",
-        "📺 QR Code para Acesso"
-    ]
-)
-
-st.sidebar.divider()
-st.sidebar.markdown("**Desenvolvido por:** victor & Dotta")
-
-# ==============================================================================
-# PAINEL 1: RESPONDER QUIZ NO CELULAR
-# ==============================================================================
-if modulo == "📱 Responder Quiz (Celular)":
-    st.title("🎯 Quiz de Compliance")
-
-    # Passo 1: Cadastro do Nickname
-    if "user_nickname" not in st.session_state:
-        st.subheader("Para começar, digite seu Apelido / Nickname:")
-        nick_input = st.text_input("Seu Nickname:", placeholder="Ex: Victor_Compliance", max_chars=20)
-        
-        if st.button("🚀 Iniciar Quiz", type="primary", use_container_width=True):
-            if nick_input.strip() != "":
-                st.session_state["user_nickname"] = nick_input.strip()
-                st.session_state["quiz_step"] = 0
-                st.session_state["score"] = 0
-                st.session_state["answered"] = False
-                st.session_state["tb_score"] = 0
-                st.session_state["tb_answered"] = False
-                st.rerun()
-            else:
-                st.warning("Por favor, digite um nickname válido.")
-
-    # Passo 2: Execução das Questões
-    else:
-        nickname = st.session_state["user_nickname"]
-        step = st.session_state.get("quiz_step", 0)
-        questions = db["questions"]
-        user_score = st.session_state["score"]
-
-        is_top_tied = check_top_tie()
-        lb = db["leaderboard"]
-        top_score = max([v["score"] for v in lb.values()]) if lb else 0
-        
-        eligible_for_tb = (
-            (user_score == top_score and user_score > 0 and is_top_tied) 
-            or db["force_tiebreaker_mode"]
-        )
-
-        # FIM DAS 5 QUESTÕES REGULARES
-        if step >= len(questions):
-            
-            if nickname not in db["leaderboard"] or db["leaderboard"][nickname]["score"] != user_score:
-                db["leaderboard"][nickname] = {
-                    "score": user_score,
-                    "tb_score": st.session_state.get("tb_score", 0),
-                    "tb_answered": st.session_state.get("tb_answered", False),
+st.sidebar.caption("Quiz Midori &
